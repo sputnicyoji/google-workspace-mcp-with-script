@@ -1,290 +1,49 @@
 // src/server.ts
+// Google Workspace MCP Server for Claude Code CLI
+// Main entry point - tool definitions
+
 import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
-import { google, docs_v1, drive_v3, sheets_v4, script_v1 } from 'googleapis';
-import { authorize } from './auth.js';
-import { OAuth2Client } from 'google-auth-library';
+import { google, docs_v1, drive_v3 } from 'googleapis';
+
+// Import modular components
+import {
+  initializeGoogleClient,
+  getDocsClient,
+  getDriveClient,
+  getSheetsClient,
+  getScriptClient,
+  getAuthClient,
+  setupProcessErrorHandlers
+} from './clients.js';
 
 // Import types and helpers
 import {
-DocumentIdParameter,
-RangeParameters,
-OptionalRangeParameters,
-TextFindParameter,
-TextStyleParameters,
-TextStyleArgs,
-ParagraphStyleParameters,
-ParagraphStyleArgs,
-ApplyTextStyleToolParameters, ApplyTextStyleToolArgs,
-ApplyParagraphStyleToolParameters, ApplyParagraphStyleToolArgs,
-NotImplementedError
+  DocumentIdParameter,
+  RangeParameters,
+  OptionalRangeParameters,
+  TextFindParameter,
+  TextStyleParameters,
+  TextStyleArgs,
+  ParagraphStyleParameters,
+  ParagraphStyleArgs,
+  ApplyTextStyleToolParameters, ApplyTextStyleToolArgs,
+  ApplyParagraphStyleToolParameters, ApplyParagraphStyleToolArgs,
+  NotImplementedError
 } from './types.js';
 import * as GDocsHelpers from './googleDocsApiHelpers.js';
 import * as SheetsHelpers from './googleSheetsApiHelpers.js';
+import { convertDocsJsonToMarkdown } from './helpers/markdown.js';
+import { registerScriptTools } from './tools/scriptTools.js';
 
-let authClient: OAuth2Client | null = null;
-let googleDocs: docs_v1.Docs | null = null;
-let googleDrive: drive_v3.Drive | null = null;
-let googleSheets: sheets_v4.Sheets | null = null;
-let googleScript: script_v1.Script | null = null;
+// Setup process error handlers
+setupProcessErrorHandlers();
 
-// --- Initialization ---
-async function initializeGoogleClient() {
-if (googleDocs && googleDrive && googleSheets && googleScript) return { authClient, googleDocs, googleDrive, googleSheets, googleScript };
-if (!authClient) { // Check authClient instead of googleDocs to allow re-attempt
-try {
-console.error("Attempting to authorize Google API client...");
-const client = await authorize();
-authClient = client; // Assign client here
-googleDocs = google.docs({ version: 'v1', auth: authClient });
-googleDrive = google.drive({ version: 'v3', auth: authClient });
-googleSheets = google.sheets({ version: 'v4', auth: authClient });
-googleScript = google.script({ version: 'v1', auth: authClient });
-console.error("Google API client authorized successfully (including Apps Script).");
-} catch (error) {
-console.error("FATAL: Failed to initialize Google API client:", error);
-authClient = null; // Reset on failure
-googleDocs = null;
-googleDrive = null;
-googleSheets = null;
-googleScript = null;
-// Decide if server should exit or just fail tools
-throw new Error("Google client initialization failed. Cannot start server tools.");
-}
-}
-// Ensure googleDocs, googleDrive, googleSheets, and googleScript are set if authClient is valid
-if (authClient && !googleDocs) {
-googleDocs = google.docs({ version: 'v1', auth: authClient });
-}
-if (authClient && !googleDrive) {
-googleDrive = google.drive({ version: 'v3', auth: authClient });
-}
-if (authClient && !googleSheets) {
-googleSheets = google.sheets({ version: 'v4', auth: authClient });
-}
-if (authClient && !googleScript) {
-googleScript = google.script({ version: 'v1', auth: authClient });
-}
-
-if (!googleDocs || !googleDrive || !googleSheets || !googleScript) {
-throw new Error("Google Docs, Drive, Sheets, and Script clients could not be initialized.");
-}
-
-return { authClient, googleDocs, googleDrive, googleSheets, googleScript };
-}
-
-// Set up process-level unhandled error/rejection handlers to prevent crashes
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  // Don't exit process, just log the error and continue
-  // This will catch timeout errors that might otherwise crash the server
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Promise Rejection:', reason);
-  // Don't exit process, just log the error and continue
-});
-
+// Create MCP server
 const server = new FastMCP({
-  name: 'Ultimate Google Docs & Sheets MCP Server',
-  version: '1.0.0'
+  name: 'Google Workspace MCP Server',
+  version: '1.1.0'
 });
-
-// --- Helper to get Docs client within tools ---
-async function getDocsClient() {
-const { googleDocs: docs } = await initializeGoogleClient();
-if (!docs) {
-throw new UserError("Google Docs client is not initialized. Authentication might have failed during startup or lost connection.");
-}
-return docs;
-}
-
-// --- Helper to get Drive client within tools ---
-async function getDriveClient() {
-const { googleDrive: drive } = await initializeGoogleClient();
-if (!drive) {
-throw new UserError("Google Drive client is not initialized. Authentication might have failed during startup or lost connection.");
-}
-return drive;
-}
-
-// --- Helper to get Sheets client within tools ---
-async function getSheetsClient() {
-const { googleSheets: sheets } = await initializeGoogleClient();
-if (!sheets) {
-throw new UserError("Google Sheets client is not initialized. Authentication might have failed during startup or lost connection.");
-}
-return sheets;
-}
-
-// --- Helper to get Script client within tools ---
-async function getScriptClient() {
-const { googleScript: script } = await initializeGoogleClient();
-if (!script) {
-throw new UserError("Google Apps Script client is not initialized. Authentication might have failed during startup or lost connection.");
-}
-return script;
-}
-
-// === HELPER FUNCTIONS ===
-
-/**
- * Converts Google Docs JSON structure to Markdown format
- */
-function convertDocsJsonToMarkdown(docData: any): string {
-    let markdown = '';
-
-    if (!docData.body?.content) {
-        return 'Document appears to be empty.';
-    }
-
-    docData.body.content.forEach((element: any) => {
-        if (element.paragraph) {
-            markdown += convertParagraphToMarkdown(element.paragraph);
-        } else if (element.table) {
-            markdown += convertTableToMarkdown(element.table);
-        } else if (element.sectionBreak) {
-            markdown += '\n---\n\n'; // Section break as horizontal rule
-        }
-    });
-
-    return markdown.trim();
-}
-
-/**
- * Converts a paragraph element to markdown
- */
-function convertParagraphToMarkdown(paragraph: any): string {
-    let text = '';
-    let isHeading = false;
-    let headingLevel = 0;
-    let isList = false;
-    let listType = '';
-
-    // Check paragraph style for headings and lists
-    if (paragraph.paragraphStyle?.namedStyleType) {
-        const styleType = paragraph.paragraphStyle.namedStyleType;
-        if (styleType.startsWith('HEADING_')) {
-            isHeading = true;
-            headingLevel = parseInt(styleType.replace('HEADING_', ''));
-        } else if (styleType === 'TITLE') {
-            isHeading = true;
-            headingLevel = 1;
-        } else if (styleType === 'SUBTITLE') {
-            isHeading = true;
-            headingLevel = 2;
-        }
-    }
-
-    // Check for bullet lists
-    if (paragraph.bullet) {
-        isList = true;
-        listType = paragraph.bullet.listId ? 'bullet' : 'bullet';
-    }
-
-    // Process text elements
-    if (paragraph.elements) {
-        paragraph.elements.forEach((element: any) => {
-            if (element.textRun) {
-                text += convertTextRunToMarkdown(element.textRun);
-            }
-        });
-    }
-
-    // Format based on style
-    if (isHeading && text.trim()) {
-        const hashes = '#'.repeat(Math.min(headingLevel, 6));
-        return `${hashes} ${text.trim()}\n\n`;
-    } else if (isList && text.trim()) {
-        return `- ${text.trim()}\n`;
-    } else if (text.trim()) {
-        return `${text.trim()}\n\n`;
-    }
-
-    return '\n'; // Empty paragraph
-}
-
-/**
- * Converts a text run to markdown with formatting
- */
-function convertTextRunToMarkdown(textRun: any): string {
-    let text = textRun.content || '';
-
-    if (textRun.textStyle) {
-        const style = textRun.textStyle;
-
-        // Apply formatting
-        if (style.bold && style.italic) {
-            text = `***${text}***`;
-        } else if (style.bold) {
-            text = `**${text}**`;
-        } else if (style.italic) {
-            text = `*${text}*`;
-        }
-
-        if (style.underline && !style.link) {
-            // Markdown doesn't have native underline, use HTML
-            text = `<u>${text}</u>`;
-        }
-
-        if (style.strikethrough) {
-            text = `~~${text}~~`;
-        }
-
-        if (style.link?.url) {
-            text = `[${text}](${style.link.url})`;
-        }
-    }
-
-    return text;
-}
-
-/**
- * Converts a table to markdown format
- */
-function convertTableToMarkdown(table: any): string {
-    if (!table.tableRows || table.tableRows.length === 0) {
-        return '';
-    }
-
-    let markdown = '\n';
-    let isFirstRow = true;
-
-    table.tableRows.forEach((row: any) => {
-        if (!row.tableCells) return;
-
-        let rowText = '|';
-        row.tableCells.forEach((cell: any) => {
-            let cellText = '';
-            if (cell.content) {
-                cell.content.forEach((element: any) => {
-                    if (element.paragraph?.elements) {
-                        element.paragraph.elements.forEach((pe: any) => {
-                            if (pe.textRun?.content) {
-                                cellText += pe.textRun.content.replace(/\n/g, ' ').trim();
-                            }
-                        });
-                    }
-                });
-            }
-            rowText += ` ${cellText} |`;
-        });
-
-        markdown += rowText + '\n';
-
-        // Add header separator after first row
-        if (isFirstRow) {
-            let separator = '|';
-            for (let i = 0; i < row.tableCells.length; i++) {
-                separator += ' --- |';
-            }
-            markdown += separator + '\n';
-            isFirstRow = false;
-        }
-    });
-
-    return markdown + '\n';
-}
 
 // === TOOL DEFINITIONS ===
 
@@ -1078,7 +837,7 @@ server.addTool({
       const doc = await docsClient.documents.get({ documentId: args.documentId });
 
       // Use Drive API v3 with proper fields to get quoted content
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient()! });
       const response = await drive.comments.list({
         fileId: args.documentId,
         fields: 'comments(id,content,quotedFileContent,author,createdTime,resolved)',
@@ -1132,7 +891,7 @@ server.addTool({
     log.info(`Getting comment ${args.commentId} from document ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient()! });
       const response = await drive.comments.get({
         fileId: args.documentId,
         commentId: args.commentId,
@@ -1211,7 +970,7 @@ server.addTool({
       }
 
       // Use Drive API v3 for comments
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient()! });
 
       const response = await drive.comments.create({
         fileId: args.documentId,
@@ -1255,7 +1014,7 @@ server.addTool({
     log.info(`Adding reply to comment ${args.commentId} in doc ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient()! });
 
       const response = await drive.replies.create({
         fileId: args.documentId,
@@ -1285,7 +1044,7 @@ server.addTool({
     log.info(`Resolving comment ${args.commentId} in doc ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient()! });
 
       // First, get the current comment content (required by the API)
       const currentComment = await drive.comments.get({
@@ -1337,7 +1096,7 @@ server.addTool({
     log.info(`Deleting comment ${args.commentId} from doc ${args.documentId}`);
 
     try {
-      const drive = google.drive({ version: 'v3', auth: authClient! });
+      const drive = google.drive({ version: 'v3', auth: getAuthClient()! });
 
       await drive.comments.delete({
         fileId: args.documentId,
@@ -2635,141 +2394,8 @@ server.addTool({
   }
 });
 
-// === APPS SCRIPT TOOLS ===
-
-server.addTool({
-  name: 'createBoundScript',
-  description: 'Creates a new Apps Script project bound to a Google Spreadsheet or Document. Returns the script ID for subsequent operations.',
-  parameters: z.object({
-    title: z.string().describe('Title for the new Apps Script project.'),
-    parentId: z.string().describe('The ID of the Google Spreadsheet or Document to bind the script to.'),
-  }),
-  execute: async (args, { log }) => {
-    const script = await getScriptClient();
-    log.info(`Creating bound Apps Script project "${args.title}" for parent: ${args.parentId}`);
-
-    try {
-      const response = await script.projects.create({
-        requestBody: {
-          title: args.title,
-          parentId: args.parentId,
-        },
-      });
-
-      const scriptId = response.data.scriptId;
-      return `Apps Script project created successfully!\n\n**Script ID:** ${scriptId}\n**Title:** ${args.title}\n**Bound to:** ${args.parentId}\n\nUse this Script ID with updateScriptContent to add your code.`;
-    } catch (error: any) {
-      log.error(`Error creating Apps Script project: ${error.message || error}`);
-      throw new UserError(`Failed to create Apps Script project: ${error.message || 'Unknown error'}`);
-    }
-  },
-});
-
-server.addTool({
-  name: 'updateScriptContent',
-  description: 'Updates the content of an Apps Script project. You can add multiple script files (Code.gs, etc.) and the manifest (appsscript.json).',
-  parameters: z.object({
-    scriptId: z.string().describe('The ID of the Apps Script project to update.'),
-    files: z.array(z.object({
-      name: z.string().describe('File name without extension (e.g., "Code" for Code.gs, "appsscript" for manifest).'),
-      type: z.enum(['SERVER_JS', 'JSON']).describe('File type: SERVER_JS for .gs files, JSON for appsscript.json manifest.'),
-      source: z.string().describe('The source code content of the file.'),
-    })).describe('Array of files to include in the script project.'),
-  }),
-  execute: async (args, { log }) => {
-    const script = await getScriptClient();
-    log.info(`Updating Apps Script project: ${args.scriptId}`);
-
-    try {
-      // Convert files to API format
-      const filesPayload = args.files.map(file => ({
-        name: file.name,
-        type: file.type,
-        source: file.source,
-      }));
-
-      await script.projects.updateContent({
-        scriptId: args.scriptId,
-        requestBody: {
-          files: filesPayload,
-        },
-      });
-
-      const fileList = args.files.map(f => `- ${f.name} (${f.type})`).join('\n');
-      return `Apps Script project updated successfully!\n\n**Script ID:** ${args.scriptId}\n**Files updated:**\n${fileList}\n\nTo run the script, open the spreadsheet and use the custom menu (if you added onOpen), or go to Extensions > Apps Script.`;
-    } catch (error: any) {
-      log.error(`Error updating Apps Script content: ${error.message || error}`);
-      throw new UserError(`Failed to update Apps Script content: ${error.message || 'Unknown error'}`);
-    }
-  },
-});
-
-server.addTool({
-  name: 'getScriptContent',
-  description: 'Retrieves the content of an Apps Script project including all files.',
-  parameters: z.object({
-    scriptId: z.string().describe('The ID of the Apps Script project to retrieve.'),
-  }),
-  execute: async (args, { log }) => {
-    const script = await getScriptClient();
-    log.info(`Getting content of Apps Script project: ${args.scriptId}`);
-
-    try {
-      const response = await script.projects.getContent({
-        scriptId: args.scriptId,
-      });
-
-      const files = response.data.files || [];
-      let result = `**Apps Script Project Content**\n**Script ID:** ${args.scriptId}\n\n`;
-
-      for (const file of files) {
-        result += `### ${file.name} (${file.type})\n\`\`\`${file.type === 'SERVER_JS' ? 'javascript' : 'json'}\n${file.source}\n\`\`\`\n\n`;
-      }
-
-      return result;
-    } catch (error: any) {
-      log.error(`Error getting Apps Script content: ${error.message || error}`);
-      throw new UserError(`Failed to get Apps Script content: ${error.message || 'Unknown error'}`);
-    }
-  },
-});
-
-server.addTool({
-  name: 'getScriptProjects',
-  description: 'Lists Apps Script projects. Note: This only works for standalone scripts. For bound scripts, use the parent document/spreadsheet ID.',
-  parameters: z.object({
-    pageSize: z.number().int().min(1).max(50).optional().default(10).describe('Maximum number of projects to return (1-50).'),
-  }),
-  execute: async (args, { log }) => {
-    const drive = await getDriveClient();
-    log.info(`Listing Apps Script projects (pageSize: ${args.pageSize})`);
-
-    try {
-      // Apps Script files have mimeType 'application/vnd.google-apps.script'
-      const response = await drive.files.list({
-        q: "mimeType='application/vnd.google-apps.script'",
-        pageSize: args.pageSize,
-        fields: 'files(id, name, createdTime, modifiedTime)',
-        orderBy: 'modifiedTime desc',
-      });
-
-      const files = response.data.files || [];
-      if (files.length === 0) {
-        return 'No standalone Apps Script projects found.';
-      }
-
-      let result = `**Apps Script Projects (${files.length} found)**\n\n`;
-      for (const file of files) {
-        result += `- **${file.name}**\n  - ID: ${file.id}\n  - Modified: ${file.modifiedTime}\n\n`;
-      }
-
-      return result;
-    } catch (error: any) {
-      log.error(`Error listing Apps Script projects: ${error.message || error}`);
-      throw new UserError(`Failed to list Apps Script projects: ${error.message || 'Unknown error'}`);
-    }
-  },
-});
+// Register Apps Script tools from module
+registerScriptTools(server);
 
 // --- Server Startup ---
 async function startServer() {

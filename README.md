@@ -1,12 +1,15 @@
-# Google Workspace MCP Server for Claude Code
+# Google Workspace MCP Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io/)
 
 [English](README.md) | [Simplified Chinese](README.zh-CN.md) | [Traditional Chinese](README.zh-TW.md)
 
-A comprehensive MCP (Model Context Protocol) server providing Claude Code CLI with full Google Workspace integration - including Google Docs, Sheets, Drive, and Apps Script APIs.
+A comprehensive MCP (Model Context Protocol) server providing full Google Workspace integration - including Google Docs, Sheets, Drive, and **Apps Script APIs**. Compatible with **Claude Code CLI**, **Cursor IDE**, and other MCP-compatible clients.
+
+> **Unique Feature**: This is the **only** Google Workspace MCP server that supports **Apps Script API** - enabling AI-driven automation of Google Sheets, Docs, and other Workspace products.
 
 ![Demo Animation](assets/google.docs.mcp.1.gif)
 
@@ -54,7 +57,7 @@ This server provides **49 tools** across 4 Google Workspace services:
 - **Node.js** v18+ with npm
 - **Git** for cloning the repository
 - **Google Account** with access to Google Workspace
-- **Claude Code CLI** (for MCP integration)
+- **MCP-compatible client**: Claude Code CLI, Cursor IDE, or other MCP clients
 
 ## Quick Start
 
@@ -138,6 +141,26 @@ Add to your Claude Code MCP configuration:
   }
 }
 ```
+
+#### 5. Configure Cursor IDE (Alternative)
+
+This MCP server is fully compatible with [Cursor IDE](https://cursor.com/).
+
+**Project-Level Configuration** - Create `.cursor/mcp.json` in your project root:
+```json
+{
+  "mcpServers": {
+    "google-workspace": {
+      "command": "node",
+      "args": ["/path/to/google-docs-mcp-for-claudecode/dist/server.js"]
+    }
+  }
+}
+```
+
+**Global Configuration** - Or configure via **Cursor Settings > MCP**.
+
+> **Note**: Cursor must be in **Agent Mode** (not Ask Mode) to access MCP tools.
 
 ## Service Account Authentication (Alternative)
 

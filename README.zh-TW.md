@@ -1,12 +1,15 @@
-# Google Workspace MCP Server for Claude Code
+# Google Workspace MCP Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io/)
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-一個全面的 MCP (Model Context Protocol) 伺服器,為 Claude Code CLI 提供完整的 Google Workspace 整合 - 包括 Google Docs、Sheets、Drive 和 Apps Script API。
+一個全面的 MCP (Model Context Protocol) 伺服器,提供完整的 Google Workspace 整合 - 包括 Google Docs、Sheets、Drive 和 **Apps Script API**。相容 **Claude Code CLI**、**Cursor IDE** 及其他 MCP 用戶端。
+
+> **獨特功能**: 這是**唯一**支援 **Apps Script API** 的 Google Workspace MCP 伺服器 - 實現 AI 驅動的 Google Sheets、Docs 及其他 Workspace 產品自動化。
 
 ![展示動畫](assets/google.docs.mcp.1.gif)
 
@@ -54,7 +57,7 @@
 - **Node.js** v18+ 及 npm
 - **Git** 用於複製儲存庫
 - **Google 帳號** 具有 Google Workspace 存取權限
-- **Claude Code CLI** (用於 MCP 整合)
+- **MCP 相容用戶端**: Claude Code CLI、Cursor IDE 或其他 MCP 用戶端
 
 ## 快速開始
 
@@ -138,6 +141,26 @@ node ./dist/server.js
   }
 }
 ```
+
+#### 5. 設定 Cursor IDE (可選)
+
+本 MCP 伺服器完全相容 [Cursor IDE](https://cursor.com/)。
+
+**專案級設定** - 在專案根目錄建立 `.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "google-workspace": {
+      "command": "node",
+      "args": ["/path/to/google-docs-mcp-for-claudecode/dist/server.js"]
+    }
+  }
+}
+```
+
+**全域設定** - 或透過 **Cursor 設定 > MCP** 進行設定。
+
+> **注意**: Cursor 必須處於 **Agent 模式** (而非 Ask 模式) 才能存取 MCP 工具。
 
 ## 服務帳號驗證 (替代方案)
 
